@@ -1,0 +1,80 @@
+#!/bin/zsh
+
+echo 'What is the name of your website (please include .com)'
+
+read website
+
+
+monicapass=$(openssl rand -base64 16)
+dbpass=$(openssl rand -base64 16)
+mysqlroot=$(openssl rand -base64 16)
+webroot=/var/www/vhosts/$website/httpdocs/
+
+add-apt-respository ppa:ondrej/php
+apt-get update 
+apt-get upgrade
+apt-get install -y 'php7.2' php7.2-cli php7.2-common php7.2-json php7.2-opcache php7.2-mysql php7.2-mbstring libmcrypt-dev php7.2-zip php7.2-fpm php7.2-bcmath php7.2-intl php7.2-xml php7.2-curl php7.2-gd 'libapache2-mod-php7.2' composer 
+
+debconf-set-selections <<< "mysql-server-5.7 mysql-server/root_password password $mysqlroot"
+sudo debconf-set-selections <<< "mysql-server-5.7 mysql-server/root_password_again password $mysqlroot"
+apt-get -y install 'mysql-server-5.7'
+
+
+mkdir -p /var/www/vhosts/$website/{httpdocs,logs}
+git clone https://github.com/monicahq/monica.git /var/www/vhosts/$website/httpdocs/
+
+cat >/tmp/user.sql <<EOL
+CREATE USER 'monica'@'localhost' IDENTIFIED BY  '${dbpass}';
+CREATE DATABASE monica; 
+GRANT ALL ON monica.* TO 'monica'@'localhost';
+FLUSH PRIVILEGES;
+EOL
+
+mysql -u root --password="$mysqlroot"< /tmp/user.sql >/dev/null 2>&1
+
+rm /tmp/user.sql
+cd $webroot/ &
+chmod -R 755 /var/www/vhosts/$website
+chown -R www-data: /var/www/vhosts/$website
+cp $webroot/.env.example $webroot/.env
+sed -i "s:"DB_USERNAME=homestead":"DB_USERNAME=monica":" $webroot/.env
+sed -i "s:"DB_PASSWORD=secret":"DB_PASSWORD=$dbpass":" $webroot/.env
+chmod -R 755 $webroot
+chown -R www-data: $webroot
+sudo -u www-data composer install -d $webroot --no-interaction --no-suggest --no-dev
+php $webroot/artisan key:generate
+php $webroot/artisan setup:production
+
+
+crontab -l > /tmp/cron
+echo "* * * * *   www-data    /usr/bin/php $webroot/artisan schedule:run" >> /tmp/cron
+crontab /tmp/cron
+rm /tmp/cron
+
+chmod -R 755 /var/www/vhosts/$website
+chown -R www-data: /var/www/vhosts/$website /etc/apache2/sites-available/$website.conf
+cat >/etc/apache2/sites-available/$website.conf <<EOL
+<VirtualHost *:80>
+ServerName ${website}
+ServerAlias ${website}
+
+ServerAdmin root@localhost.com
+DocumentRoot /var/www/vhosts/${website}/httpdocs
+
+<Directory ${webroot}>
+    Options Indexes FollowSymLinks
+    AllowOverride All
+    Require all granted
+</Directory>
+
+
+ErrorLog /var/www/vhosts/${website}/logs/error.log
+CustomLog /var/www/vhosts/${website}/logs/access.log combined
+
+
+</VirtualHost>
+EOL
+a2dissite 000-default.conf
+a2ensite $website.conf
+service apache2 restart
+
