@@ -1,11 +1,10 @@
-#!/bin/zsh
+#!/bin/bash
 
 echo 'What is the name of your website (please include .com)'
 
 read website
 
 
-monicapass=$(openssl rand -base64 16)
 dbpass=$(openssl rand -base64 16)
 mysqlroot=$(openssl rand -base64 16)
 webroot=/var/www/vhosts/$website/httpdocs/
@@ -25,26 +24,28 @@ git clone https://github.com/monicahq/monica.git /var/www/vhosts/$website/httpdo
 
 cat >/tmp/user.sql <<EOL
 CREATE USER 'monica'@'localhost' IDENTIFIED BY  '${dbpass}';
-CREATE DATABASE monica; 
+CREATE DATABASE monica;
 GRANT ALL ON monica.* TO 'monica'@'localhost';
 FLUSH PRIVILEGES;
 EOL
 
+
 mysql -u root --password="$mysqlroot"< /tmp/user.sql >/dev/null 2>&1
 
-rm /tmp/user.sql
+rm /tmp/user.sql /tmp/default.sql
 cd $webroot/ &
 chmod -R 755 /var/www/vhosts/$website
 chown -R www-data: /var/www/vhosts/$website
 cp $webroot/.env.example $webroot/.env
 sed -i "s:"DB_USERNAME=homestead":"DB_USERNAME=monica":" $webroot/.env
 sed -i "s:"DB_PASSWORD=secret":"DB_PASSWORD=$dbpass":" $webroot/.env
+sed -i "s:"APP_URL=http://localhost":"APP_URL=http://$website":"
 chmod -R 755 $webroot
 chown -R www-data: $webroot
 sudo -u www-data composer install -d $webroot --no-interaction --no-suggest --no-dev
 php $webroot/artisan key:generate
+php $webroot/artisan migrate
 php $webroot/artisan setup:production
-
 
 crontab -l > /tmp/cron
 echo "* * * * *   www-data    /usr/bin/php $webroot/artisan schedule:run" >> /tmp/cron
@@ -59,9 +60,9 @@ ServerName ${website}
 ServerAlias ${website}
 
 ServerAdmin root@localhost.com
-DocumentRoot /var/www/vhosts/${website}/httpdocs
+DocumentRoot /var/www/vhosts/${website}/httpdocs/public/
 
-<Directory ${webroot}>
+<Directory ${webroot}/public/>
     Options Indexes FollowSymLinks
     AllowOverride All
     Require all granted
@@ -77,4 +78,17 @@ EOL
 a2dissite 000-default.conf
 a2ensite $website.conf
 service apache2 restart
+
+
+
+
+cat <<EOF
+
+###### Store these in a safe place they will dissapear after this ######
+
+
+Mysql root password is  ${mysqlroot}
+Monica db user password is  ${dbpass}
+
+EOF
 
